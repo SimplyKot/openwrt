@@ -1,0 +1,252 @@
+Subject: [PATCH] net: phy: marvell: add LED API support for 88E1116R
+
+Signed-off-by: Konstantin Meshkov <skyline@mail.ru>
+
+---
+ drivers/net/phy/marvell.c | 219 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 219 insertions(+)
+
+diff --git a/drivers/net/phy/marvell.c b/drivers/net/phy/marvell.c
+index c248c90..c8d919d 100644
+--- a/drivers/net/phy/marvell.c	2026-08-09 21:25:30.000000000 +0300
++++ b/drivers/net/phy/marvell.c	2026-08-28 13:21:40.301511058 +0300
+@@ -1263,6 +1263,14 @@
+ 	if (err < 0)
+ 		return err;
+ 
++	/* Set LED polarity/mode baseline. reg17=0x4411 is required for
++	 * correct LED behavior on boards with active-low LED wiring
++	 * (e.g. D-Link DNS-325). Without this, the function codes
++	 * produce inverted or incorrect LED states.
++	 */
++	err = phy_write_paged(phydev, MII_MARVELL_LED_PAGE, 0x11, 0x4411);
++	if (err < 0)
++		return err;
+ 	return marvell_config_init(phydev);
+ }
+ 
+@@ -3585,6 +3593,212 @@
+ 	return marvell_get_led_rules(index, rules, mode);
+ }
+ 
++
++
++/* 88E1116R LED register is at page 3, reg 0x10 (same as 88E1318S),
++ * but the register layout and function codes are different:
++ *   [3:0]   = LED0 (left)  function select
++ *   [7:4]   = LED0 (left)  blink control
++ *   [11:8]  = LED1 (right) function select
++ *   [15:12] = LED1 (right) blink control
++ * Function codes (verified with reg17=0x4411):
++ *   OFF=0x9, ON=0xe, Activity=0x1, 1G_Link=0x7
++ */
++#define MII_88E1116R_PHY_LED_FUNC_OFF		0x9
++#define MII_88E1116R_PHY_LED_FUNC_ON		0xe
++#define MII_88E1116R_PHY_LED_FUNC_BLINK		0xb
++
++
++/* 88E1116R LED support - different register layout and function codes
++ * from 88E1318S. LED0=[3:0], LED1=[11:8] with blink nibbles between.
++ */
++
++/* 88E1116R LED0 (left) rules table - maps netdev triggers to function codes */
++static const struct marvell_led_rules marvell_88e1116r_led0[] = {
++	{
++		.mode = 0x7,
++		.rules = BIT(TRIGGER_NETDEV_LINK_1000),
++	},
++	{
++		.mode = 0x1,
++		.rules = (BIT(TRIGGER_NETDEV_RX) |
++			  BIT(TRIGGER_NETDEV_TX)),
++	},
++};
++
++/* 88E1116R LED1 (right) rules table */
++static const struct marvell_led_rules marvell_88e1116r_led1[] = {
++	{
++		.mode = 0x1,
++		.rules = (BIT(TRIGGER_NETDEV_RX) |
++			  BIT(TRIGGER_NETDEV_TX)),
++	},
++};
++
++/* Convert 88E1116R LED index to register shift.
++ * LED0 at bits [3:0] = shift 0, LED1 at bits [11:8] = shift 8.
++ * This differs from 88E1318S where shift = 4 * index.
++ */
++static int m88e1116r_led_shift(u8 index)
++{
++	switch (index) {
++	case 0:
++		return 0;
++	case 1:
++		return 8;
++	default:
++		return -EINVAL;
++	}
++}
++
++static int m88e1116r_led_brightness_set(struct phy_device *phydev,
++					u8 index, enum led_brightness value)
++{
++	int reg, shift;
++
++	shift = m88e1116r_led_shift(index);
++	if (shift < 0)
++		return shift;
++
++	reg = phy_read_paged(phydev, MII_MARVELL_LED_PAGE,
++			     MII_88E1318S_PHY_LED_FUNC);
++	if (reg < 0)
++		return reg;
++
++	reg &= ~(0xf << shift);
++	if (value == LED_OFF)
++		reg |= MII_88E1116R_PHY_LED_FUNC_OFF << shift;
++	else
++		reg |= MII_88E1116R_PHY_LED_FUNC_ON << shift;
++
++	return phy_write_paged(phydev, MII_MARVELL_LED_PAGE,
++			       MII_88E1318S_PHY_LED_FUNC, reg);
++}
++
++static int m88e1116r_led_blink_set(struct phy_device *phydev, u8 index,
++				   unsigned long *delay_on,
++				   unsigned long *delay_off)
++{
++	int reg, shift;
++
++	shift = m88e1116r_led_shift(index);
++	if (shift < 0)
++		return shift;
++
++	reg = phy_read_paged(phydev, MII_MARVELL_LED_PAGE,
++			     MII_88E1318S_PHY_LED_FUNC);
++	if (reg < 0)
++		return reg;
++
++	reg &= ~(0xf << shift);
++	reg |= MII_88E1116R_PHY_LED_FUNC_BLINK << shift;
++	/* Default blink rate ~84ms */
++	*delay_on = 84 / 2;
++	*delay_off = 84 / 2;
++
++	return phy_write_paged(phydev, MII_MARVELL_LED_PAGE,
++			       MII_88E1318S_PHY_LED_FUNC, reg);
++}
++
++static int m88e1116r_led_hw_is_supported(struct phy_device *phydev,
++					  u8 index, unsigned long rules)
++{
++	int mode, ret;
++
++	switch (index) {
++	case 0:
++		ret = marvell_find_led_mode(rules, marvell_88e1116r_led0,
++					    ARRAY_SIZE(marvell_88e1116r_led0),
++					    &mode);
++		break;
++	case 1:
++		ret = marvell_find_led_mode(rules, marvell_88e1116r_led1,
++					    ARRAY_SIZE(marvell_88e1116r_led1),
++					    &mode);
++		break;
++	default:
++		ret = -EINVAL;
++	}
++
++	return ret;
++}
++
++static int m88e1116r_led_hw_control_set(struct phy_device *phydev,
++					u8 index, unsigned long rules)
++{
++	int mode, ret, reg, shift;
++
++	switch (index) {
++	case 0:
++		ret = marvell_find_led_mode(rules, marvell_88e1116r_led0,
++					    ARRAY_SIZE(marvell_88e1116r_led0),
++					    &mode);
++		break;
++	case 1:
++		ret = marvell_find_led_mode(rules, marvell_88e1116r_led1,
++					    ARRAY_SIZE(marvell_88e1116r_led1),
++					    &mode);
++		break;
++	default:
++		ret = -EINVAL;
++	}
++
++	if (ret < 0)
++		return ret;
++
++	shift = m88e1116r_led_shift(index);
++	if (shift < 0)
++		return shift;
++
++	reg = phy_read_paged(phydev, MII_MARVELL_LED_PAGE,
++			     MII_88E1318S_PHY_LED_FUNC);
++	if (reg < 0)
++		return reg;
++
++	reg &= ~(0xf << shift);
++	reg |= mode << shift;
++	return phy_write_paged(phydev, MII_MARVELL_LED_PAGE,
++			       MII_88E1318S_PHY_LED_FUNC, reg);
++}
++
++static int m88e1116r_led_hw_control_get(struct phy_device *phydev,
++					u8 index, unsigned long *rules)
++{
++	int mode, reg, shift;
++
++	shift = m88e1116r_led_shift(index);
++	if (shift < 0)
++		return shift;
++
++	reg = phy_read_paged(phydev, MII_MARVELL_LED_PAGE,
++			     MII_88E1318S_PHY_LED_FUNC);
++	if (reg < 0)
++		return reg;
++
++	mode = (reg >> shift) & 0xf;
++
++	switch (index) {
++	case 0:
++		if (!marvell_find_led_rules(rules, marvell_88e1116r_led0,
++					    ARRAY_SIZE(marvell_88e1116r_led0),
++					    mode))
++			return 0;
++		*rules = BIT(TRIGGER_NETDEV_LINK_1000);
++		return 0;
++	case 1:
++		if (!marvell_find_led_rules(rules, marvell_88e1116r_led1,
++					    ARRAY_SIZE(marvell_88e1116r_led1),
++					    mode))
++			return 0;
++		*rules = BIT(TRIGGER_NETDEV_RX) | BIT(TRIGGER_NETDEV_TX);
++		return 0;
++	default:
++		return -EINVAL;
++	}
++}
++
++
++
+ static int marvell_probe(struct phy_device *phydev)
+ {
+ 	struct marvell_priv *priv;
+@@ -3942,6 +4156,11 @@
+ 		.get_stats = marvell_get_stats,
+ 		.get_tunable = m88e1011_get_tunable,
+ 		.set_tunable = m88e1011_set_tunable,
++		.led_brightness_set = m88e1116r_led_brightness_set,
++		.led_blink_set = m88e1116r_led_blink_set,
++		.led_hw_is_supported = m88e1116r_led_hw_is_supported,
++		.led_hw_control_set = m88e1116r_led_hw_control_set,
++		.led_hw_control_get = m88e1116r_led_hw_control_get,
+ 	},
+ 	{
+ 		.phy_id = MARVELL_PHY_ID_88E1510,
