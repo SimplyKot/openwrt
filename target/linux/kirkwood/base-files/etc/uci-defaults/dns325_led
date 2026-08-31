@@ -1,0 +1,27 @@
+#
+# DNS-325 PHY LED configuration (stock behavior)
+# Left LED: 1G link indicator, right LED: RX/TX activity
+#
+
+. /lib/functions.sh || exit 0
+
+case "$(board_name)" in
+dlink,dns-325-a1)
+	uci show system 2>/dev/null | grep -q "mdio-bus-mii:08:green:status" && exit 0
+
+	lan=$(uci add system led)
+	uci set system.$lan.sysfs="f1072004.mdio-bus-mii:08:green:status"
+	uci set system.$lan.trigger="netdev"
+	uci set system.$lan.dev="eth0"
+	uci add_list system.$lan.mode="link_1000"
+
+	act=$(uci add system led)
+	uci set system.$act.sysfs="f1072004.mdio-bus-mii:08:green:activity"
+	uci set system.$act.trigger="netdev"
+	uci set system.$act.dev="eth0"
+	uci add_list system.$act.mode="rx"
+	uci add_list system.$act.mode="tx"
+	;;
+esac
+
+exit 0

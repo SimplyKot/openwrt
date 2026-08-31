@@ -1,0 +1,55 @@
+Subject: [PATCH] ARM: dts: kirkwood: dns325: add PHY LED configuration
+
+Signed-off-by: Konstantin Meshkov <skyline@mail.ru>
+
+---
+ arch/arm/boot/dts/marvell/kirkwood-dns325.dts | 29 +++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/arch/arm/boot/dts/marvell/kirkwood-dns325.dts b/arch/arm/boot/dts/marvell/kirkwood-dns325.dts
+index aa7e43e..7157221 100644
+--- a/arch/arm/boot/dts/marvell/kirkwood-dns325.dts
++++ b/arch/arm/boot/dts/marvell/kirkwood-dns325.dts
+@@ -2,6 +2,7 @@
+ /dts-v1/;
+ 
+ #include "kirkwood-dnskw.dtsi"
++#include <dt-bindings/leds/common.h>
+ #include <dt-bindings/thermal/thermal.h>
+ 
+ / {
+@@ -113,3 +114,31 @@
+ &fan0 {
+ 	#cooling-cells = <2>;
+ };
++
++&ethphy0 {
++	leds {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		/* left PHY LED: link status indicator (stock behavior) */
++		led@0 {
++			reg = <0>;
++			color = <LED_COLOR_ID_GREEN>;
++			function = LED_FUNCTION_STATUS;
++			linux,default-trigger = "netdev";
++			netdev,dev = "eth0";
++			netdev,link-1000;
++		};
++
++		/* right PHY LED: activity blink (stock behavior) */
++		led@1 {
++			reg = <1>;
++			color = <LED_COLOR_ID_GREEN>;
++			function = LED_FUNCTION_ACTIVITY;
++			linux,default-trigger = "netdev";
++			netdev,dev = "eth0";
++			netdev,rx;
++			netdev,tx;
++		};
++	};
++};
+-- 
+2.47.3
+
